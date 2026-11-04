@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model detail_pesanan {
+  no_nota   String  @db.VarChar(10)
+  id_produk String  @db.VarChar(10)
+  jumlah    Int
+  subtotal  Decimal @db.Decimal(10, 2)
+  produk    produk  @relation(fields: [id_produk], references: [id_produk])
+  pesanan   pesanan @relation(fields: [no_nota], references: [no_nota])
+
+  @@id([no_nota, id_produk])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model detail_produksi {
+  id_produksi     String   @db.VarChar(10)
+  id_produk       String   @db.VarChar(10)
+  jumlah_produksi Int
+  produk          produk   @relation(fields: [id_produk], references: [id_produk])
+  produksi        produksi @relation(fields: [id_produksi], references: [id_produksi])
+
+  @@id([id_produksi, id_produk])
+}
+
+model feedback {
+  id_feedback        String               @id @db.VarChar(10)
+  isi_feedback       String               @db.VarChar(255)
+  tgl_feedback       DateTime             @db.Date
+  no_nota            String               @db.VarChar(10)
+  pesanan            pesanan              @relation(fields: [no_nota], references: [no_nota])
+  tanggapan_feedback tanggapan_feedback[]
+}
+
+model karyawan {
+  id_karyawan                          String               @id @db.VarChar(10)
+  nama_karyawan                        String               @db.VarChar(100)
+  jabatan                              String               @db.VarChar(50)
+  no_hp                                String               @db.VarChar(15)
+  tgl_lahir                            DateTime?            @db.Date
+  jenis_kelamin                        String?              @db.VarChar(15)
+  id_user                              String               @unique @db.VarChar(10)
+  kode_pos                             String               @db.VarChar(10)
+  pengguna                             pengguna             @relation(fields: [id_user], references: [id_user])
+  kode_pos_karyawan_kode_posTokode_pos kode_pos             @relation("karyawan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos])
+  pesanan                              pesanan[]
+  produksi                             produksi[]
+  tanggapan_feedback                   tanggapan_feedback[]
+}
+
+model kategori {
+  id_kategori   String   @id @db.VarChar(10)
+  nama_kategori String   @unique @db.VarChar(50)
+  produk        produk[]
+}
+
+model kode_pos {
+  kode_pos                               String      @id @db.VarChar(10)
+  kelurahan                              String      @db.VarChar(100)
+  kecamatan                              String      @db.VarChar(100)
+  kota                                   String      @db.VarChar(100)
+  provinsi                               String      @db.VarChar(100)
+  karyawan_karyawan_kode_posTokode_pos   karyawan[]  @relation("karyawan_kode_posTokode_pos")
+  pelanggan_pelanggan_kode_posTokode_pos pelanggan[] @relation("pelanggan_kode_posTokode_pos")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model laporan {
+  id_laporan    String   @id @db.VarChar(10)
+  jenis_laporan String   @db.VarChar(50)
+  total_laporan Decimal  @db.Decimal(15, 2)
+  id_user       String   @db.VarChar(10)
+  pengguna      pengguna @relation(fields: [id_user], references: [id_user])
+}
+
+model pelanggan {
+  id_pelanggan                          String    @id @db.VarChar(10)
+  nama_pelanggan                        String    @db.VarChar(100)
+  no_hp                                 String    @db.VarChar(15)
+  alamat                                String    @db.VarChar(100)
+  jenis_kelamin                         String?   @db.VarChar(15)
+  tgl_lahir                             DateTime? @db.Date
+  id_user                               String    @unique @db.VarChar(10)
+  kode_pos                              String    @db.VarChar(10)
+  pengguna                              pengguna  @relation(fields: [id_user], references: [id_user])
+  kode_pos_pelanggan_kode_posTokode_pos kode_pos  @relation("pelanggan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos])
+  pesanan                               pesanan[]
+}
+
+model pengguna {
+  id_user                String     @id @db.VarChar(10)
+  username               String     @unique @db.VarChar(50)
+  password               String     @db.VarChar(100)
+  email                  String     @unique @db.VarChar(100)
+  role                   String     @db.VarChar(20)
+  status_akun            String     @db.VarChar(20)
+  tanggal_registrasi     DateTime   @db.Date
+  tanggal_login_terakhir DateTime?  @db.Date
+  karyawan               karyawan?
+  laporan                laporan[]
+  pelanggan              pelanggan?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model pesanan {
+  no_nota               String           @id @db.VarChar(10)
+  tgl_nota              DateTime         @db.Date
+  total_bayar           Decimal          @db.Decimal(10, 2)
+  metode_bayar          String?          @db.VarChar(50)
+  status_bayar          String           @db.VarChar(20)
+  tgl_bayar             DateTime?        @db.Date
+  id_pelanggan          String           @db.VarChar(10)
+  id_karyawan           String           @db.VarChar(10)
+  kode_voucher          String?          @db.VarChar(20)
+  konfirmasi_pembayaran String?          @db.VarChar(20)
+  detail_pesanan        detail_pesanan[]
+  feedback              feedback[]
+  karyawan              karyawan         @relation(fields: [id_karyawan], references: [id_karyawan])
+  pelanggan             pelanggan        @relation(fields: [id_pelanggan], references: [id_pelanggan])
+  voucher               voucher?         @relation(fields: [kode_voucher], references: [kode_voucher], onDelete: Restrict)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model produk {
+  id_produk       String            @id @db.VarChar(10)
+  nama_produk     String            @unique @db.VarChar(100)
+  harga           Decimal           @db.Decimal(10, 2)
+  id_kategori     String            @db.VarChar(10)
+  detail_pesanan  detail_pesanan[]
+  detail_produksi detail_produksi[]
+  kategori        kategori          @relation(fields: [id_kategori], references: [id_kategori])
+}
+
+model produksi {
+  id_produksi            String            @id @db.VarChar(10)
+  tgl_produksi           DateTime?         @db.Date
+  status_peringatan_stok String?           @db.VarChar(50)
+  id_karyawan            String?           @db.VarChar(10)
+  detail_produksi        detail_produksi[]
+  karyawan               karyawan?         @relation(fields: [id_karyawan], references: [id_karyawan], onDelete: Restrict)
+}
+
+model tanggapan_feedback {
+  id_tanggapan  String   @id @db.VarChar(10)
+  isi_tanggapan String   @db.VarChar(255)
+  tgl_tanggapan DateTime @db.Date
+  id_feedback   String   @db.VarChar(10)
+  id_karyawan   String   @db.VarChar(10)
+  feedback      feedback @relation(fields: [id_feedback], references: [id_feedback])
+  karyawan      karyawan @relation(fields: [id_karyawan], references: [id_karyawan])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model voucher {
+  kode_voucher     String    @id @db.VarChar(20)
+  potongan_voucher Decimal   @db.Decimal(10, 2)
+  pesanan          pesanan[]
+}
