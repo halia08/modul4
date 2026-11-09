@@ -9,25 +9,23 @@ datasource db {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model detail_pesanan {
+  id_detail String  @id @db.VarChar(10)
   no_nota   String  @db.VarChar(10)
   id_produk String  @db.VarChar(10)
   jumlah    Int
   subtotal  Decimal @db.Decimal(10, 2)
-  produk    produk  @relation(fields: [id_produk], references: [id_produk])
-  pesanan   pesanan @relation(fields: [no_nota], references: [no_nota])
-
-  @@id([no_nota, id_produk])
+  produk    produk  @relation(fields: [id_produk], references: [id_produk], onDelete: NoAction, onUpdate: NoAction)
+  pesanan   pesanan @relation(fields: [no_nota], references: [no_nota], onDelete: NoAction, onUpdate: NoAction)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model detail_produksi {
-  id_produksi     String   @db.VarChar(10)
-  id_produk       String   @db.VarChar(10)
-  jumlah_produksi Int
-  produk          produk   @relation(fields: [id_produk], references: [id_produk])
-  produksi        produksi @relation(fields: [id_produksi], references: [id_produksi])
-
-  @@id([id_produksi, id_produk])
+  id_detail_produksi String   @id @db.VarChar(10)
+  id_produksi        String   @db.VarChar(10)
+  id_produk          String   @db.VarChar(10)
+  jumlah_produksi    Int
+  produk             produk   @relation(fields: [id_produk], references: [id_produk], onDelete: NoAction, onUpdate: NoAction)
+  produksi           produksi @relation(fields: [id_produksi], references: [id_produksi], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model feedback {
@@ -35,7 +33,7 @@ model feedback {
   isi_feedback       String               @db.VarChar(255)
   tgl_feedback       DateTime             @db.Date
   no_nota            String               @db.VarChar(10)
-  pesanan            pesanan              @relation(fields: [no_nota], references: [no_nota])
+  pesanan            pesanan              @relation(fields: [no_nota], references: [no_nota], onDelete: NoAction, onUpdate: NoAction)
   tanggapan_feedback tanggapan_feedback[]
 }
 
@@ -46,10 +44,10 @@ model karyawan {
   no_hp                                String               @db.VarChar(15)
   tgl_lahir                            DateTime?            @db.Date
   jenis_kelamin                        String?              @db.VarChar(15)
-  id_user                              String               @unique @db.VarChar(10)
+  id_user                              String               @db.VarChar(10)
   kode_pos                             String               @db.VarChar(10)
-  pengguna                             pengguna             @relation(fields: [id_user], references: [id_user])
-  kode_pos_karyawan_kode_posTokode_pos kode_pos             @relation("karyawan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos])
+  pengguna                             pengguna             @relation(fields: [id_user], references: [id_user], onDelete: NoAction, onUpdate: NoAction)
+  kode_pos_karyawan_kode_posTokode_pos kode_pos             @relation("karyawan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos], onDelete: NoAction, onUpdate: NoAction)
   pesanan                              pesanan[]
   produksi                             produksi[]
   tanggapan_feedback                   tanggapan_feedback[]
@@ -57,7 +55,7 @@ model karyawan {
 
 model kategori {
   id_kategori   String   @id @db.VarChar(10)
-  nama_kategori String   @unique @db.VarChar(50)
+  nama_kategori String   @db.VarChar(50)
   produk        produk[]
 }
 
@@ -77,7 +75,7 @@ model laporan {
   jenis_laporan String   @db.VarChar(50)
   total_laporan Decimal  @db.Decimal(15, 2)
   id_user       String   @db.VarChar(10)
-  pengguna      pengguna @relation(fields: [id_user], references: [id_user])
+  pengguna      pengguna @relation(fields: [id_user], references: [id_user], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model pelanggan {
@@ -87,25 +85,25 @@ model pelanggan {
   alamat                                String    @db.VarChar(100)
   jenis_kelamin                         String?   @db.VarChar(15)
   tgl_lahir                             DateTime? @db.Date
-  id_user                               String    @unique @db.VarChar(10)
+  id_user                               String    @db.VarChar(10)
   kode_pos                              String    @db.VarChar(10)
-  pengguna                              pengguna  @relation(fields: [id_user], references: [id_user])
-  kode_pos_pelanggan_kode_posTokode_pos kode_pos  @relation("pelanggan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos])
+  pengguna                              pengguna  @relation(fields: [id_user], references: [id_user], onDelete: NoAction, onUpdate: NoAction)
+  kode_pos_pelanggan_kode_posTokode_pos kode_pos  @relation("pelanggan_kode_posTokode_pos", fields: [kode_pos], references: [kode_pos], onDelete: NoAction, onUpdate: NoAction)
   pesanan                               pesanan[]
 }
 
 model pengguna {
-  id_user                String     @id @db.VarChar(10)
-  username               String     @unique @db.VarChar(50)
-  password               String     @db.VarChar(100)
-  email                  String     @unique @db.VarChar(100)
-  role                   String     @db.VarChar(20)
-  status_akun            String     @db.VarChar(20)
-  tanggal_registrasi     DateTime   @db.Date
-  tanggal_login_terakhir DateTime?  @db.Date
-  karyawan               karyawan?
+  id_user                String      @id @db.VarChar(10)
+  username               String      @db.VarChar(50)
+  password               String      @db.VarChar(100)
+  email                  String      @db.VarChar(100)
+  role                   String      @db.VarChar(20)
+  status_akun            String      @db.VarChar(20)
+  tanggal_registrasi     DateTime    @db.Date
+  tanggal_login_terakhir DateTime?   @db.Date
+  karyawan               karyawan[]
   laporan                laporan[]
-  pelanggan              pelanggan?
+  pelanggan              pelanggan[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -122,20 +120,20 @@ model pesanan {
   konfirmasi_pembayaran String?          @db.VarChar(20)
   detail_pesanan        detail_pesanan[]
   feedback              feedback[]
-  karyawan              karyawan         @relation(fields: [id_karyawan], references: [id_karyawan])
-  pelanggan             pelanggan        @relation(fields: [id_pelanggan], references: [id_pelanggan])
-  voucher               voucher?         @relation(fields: [kode_voucher], references: [kode_voucher], onDelete: Restrict)
+  karyawan              karyawan         @relation(fields: [id_karyawan], references: [id_karyawan], onDelete: NoAction, onUpdate: NoAction)
+  pelanggan             pelanggan        @relation(fields: [id_pelanggan], references: [id_pelanggan], onDelete: NoAction, onUpdate: NoAction)
+  voucher               voucher?         @relation(fields: [kode_voucher], references: [kode_voucher], onDelete: NoAction, onUpdate: NoAction)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model produk {
   id_produk       String            @id @db.VarChar(10)
-  nama_produk     String            @unique @db.VarChar(100)
+  nama_produk     String            @db.VarChar(100)
   harga           Decimal           @db.Decimal(10, 2)
   id_kategori     String            @db.VarChar(10)
   detail_pesanan  detail_pesanan[]
   detail_produksi detail_produksi[]
-  kategori        kategori          @relation(fields: [id_kategori], references: [id_kategori])
+  kategori        kategori          @relation(fields: [id_kategori], references: [id_kategori], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model produksi {
@@ -144,7 +142,7 @@ model produksi {
   status_peringatan_stok String?           @db.VarChar(50)
   id_karyawan            String?           @db.VarChar(10)
   detail_produksi        detail_produksi[]
-  karyawan               karyawan?         @relation(fields: [id_karyawan], references: [id_karyawan], onDelete: Restrict)
+  karyawan               karyawan?         @relation(fields: [id_karyawan], references: [id_karyawan], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model tanggapan_feedback {
@@ -153,8 +151,8 @@ model tanggapan_feedback {
   tgl_tanggapan DateTime @db.Date
   id_feedback   String   @db.VarChar(10)
   id_karyawan   String   @db.VarChar(10)
-  feedback      feedback @relation(fields: [id_feedback], references: [id_feedback])
-  karyawan      karyawan @relation(fields: [id_karyawan], references: [id_karyawan])
+  feedback      feedback @relation(fields: [id_feedback], references: [id_feedback], onDelete: NoAction, onUpdate: NoAction)
+  karyawan      karyawan @relation(fields: [id_karyawan], references: [id_karyawan], onDelete: NoAction, onUpdate: NoAction)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
