@@ -1,360 +1,293 @@
-import { randomUUID } from "node:crypto";
-import { Prisma } from "../../generated/prisma/client";
-import { prisma } from "../../../lib/prisma";
+import { Prisma } from "@/app/generated/prisma/client";
+import { NextResponse } from "next/server";
+import { authorizeRequest } from "@/lib/access";
+import type { UserRole } from "@/lib/auth";
+import { createDatabaseId } from "@/lib/ids";
+import { prisma } from "@/lib/prisma";
 
-const orderInclude = {
-  detail_pesanan: {
-    include: {
-      produk: {
-        select: {
-          id_produk: true,
-          nama_produk: true,
-          harga: true,
-        },
-      },
-    },
-  },
-  pelanggan: {
-    select: {
-      id_pelanggan: true,
-      nama_pelanggan: true,
-    },
-  },
-} satisfies Prisma.pesananInclude;
+const staffRoles: readonly UserRole[] = ["Admin", "Owner", "Karyawan"];
+const allowedRoles: readonly UserRole[] = [
+  ...staffRoles,
+  "Pelanggan",
+];
 
-type OrderItemInput = {
-  id_produk: string;
-  jumlah: number;
-};
-
-class RequestError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
+type OrderLineInput = { id_produk: string; jumlah: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function readJson(request: Request): Promise<unknown> {
+function parseItems(value: unknown): OrderLineInput[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    return null;
+  }
+
+  const grouped = new Map<string, number>();
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id_produk !== "string") {
+      return null;
+    }
+
+    const id = item.id_produk.trim();
+    const quantity = item.jumlah;
+    if (
+      id.length === 0 ||
+      id.length > 10 ||
+      typeof quantity !== "number" ||
+      !Number.isInteger(quantity) ||
+      quantity < 1 ||
+      quantity > 10_000
+    ) {
+      return null;
+    }
+
+    const total = (grouped.get(id) ?? 0) + quantity;
+    if (total > 10_000) {
+      return null;
+    }
+    grouped.set(id, total);
+  }
+
+  return Array.from(grouped, ([id_produk, jumlah]) => ({
+    id_produk,
+    jumlah,
+  }));
+}
+
+export async function GET(request: Request) {
+  const authorization = await authorizeRequest(request, allowedRoles);
+  if (!authorization.ok) return authorization.response;
+
   try {
-    return await request.json();
+    const url = new URL(request.url);
+    const query = url.searchParams.get("q")?.trim();
+    const status = url.searchParams.get("status")?.trim();
+    let customerId: string | undefined;
+
+    if (authorization.session.role === "Pelanggan") {
+      const customer = await prisma.pelanggan.findFirst({
+        where: { id_user: authorization.session.userId },
+        select: { id_pelanggan: true },
+      });
+      if (!customer) {
+        return NextResponse.json(
+          { orders: [], needsProfile: true },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
+      customerId = customer.id_pelanggan;
+    }
+
+    const orders = await prisma.pesanan.findMany({
+      where: {
+        ...(customerId ? { id_pelanggan: customerId } : {}),
+        ...(query
+          ? {
+              OR: [
+                { no_nota: { contains: query, mode: "insensitive" } },
+                {
+                  pelanggan: {
+                    nama_pelanggan: { contains: query, mode: "insensitive" },
+                  },
+                },
+              ],
+            }
+          : {}),
+        ...(status
+          ? { status_bayar: { equals: status, mode: "insensitive" } }
+          : {}),
+      },
+      include: {
+        pelanggan: { select: { id_pelanggan: true, nama_pelanggan: true } },
+        detail_pesanan: {
+          include: {
+            produk: {
+              select: {
+                id_produk: true,
+                nama_produk: true,
+                harga: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ tgl_nota: "desc" }, { no_nota: "desc" }],
+    });
+
+    return NextResponse.json(
+      {
+        orders: orders.map((order) => ({
+          id: order.no_nota,
+          date: order.tgl_nota.toISOString().slice(0, 10),
+          total: Number(order.total_bayar),
+          status: order.status_bayar,
+          paymentMethod: order.metode_bayar,
+          paymentConfirmation: order.konfirmasi_pembayaran,
+          customerId: order.pelanggan.id_pelanggan,
+          customer: order.pelanggan.nama_pelanggan,
+          items: order.detail_pesanan.map((item) => ({
+            productId: item.id_produk,
+            name: item.produk.nama_produk,
+            quantity: item.jumlah,
+            subtotal: Number(item.subtotal),
+          })),
+        })),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (error) {
+    console.error("Orders could not be loaded.", error);
+    return NextResponse.json(
+      { error: "Data pesanan tidak dapat dimuat saat ini." },
+      { status: 500, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  const authorization = await authorizeRequest(request, ["Pelanggan"]);
+  if (!authorization.ok) return authorization.response;
+
+  try {
+    const body: unknown = await request.json();
+    if (!isRecord(body)) {
+      return NextResponse.json({ error: "Data pesanan tidak valid." }, { status: 400 });
+    }
+
+    const items = parseItems(body.items);
+    const paymentMethod =
+      typeof body.metode_bayar === "string" ? body.metode_bayar.trim() : "";
+    if (!items) {
+      return NextResponse.json(
+        { error: "Pesanan harus memiliki produk dan jumlah yang valid." },
+        { status: 400 },
+      );
+    }
+    if (!["Transfer Bank", "QRIS", "Tunai"].includes(paymentMethod)) {
+      return NextResponse.json(
+        { error: "Metode pembayaran tidak valid." },
+        { status: 400 },
+      );
+    }
+
+    const result = await prisma.$transaction(
+      async (transaction) => {
+        const [customer, employee, products] = await Promise.all([
+          transaction.pelanggan.findFirst({
+            where: { id_user: authorization.session.userId },
+            select: { id_pelanggan: true },
+          }),
+          transaction.karyawan.findFirst({
+            orderBy: { id_karyawan: "asc" },
+            select: { id_karyawan: true },
+          }),
+          transaction.produk.findMany({
+            where: { id_produk: { in: items.map((item) => item.id_produk) } },
+            select: { id_produk: true, harga: true },
+          }),
+        ]);
+
+        if (!customer) return { error: "PROFILE_REQUIRED" } as const;
+        if (!employee) return { error: "EMPLOYEE_REQUIRED" } as const;
+        if (products.length !== items.length) {
+          return { error: "PRODUCT_NOT_FOUND" } as const;
+        }
+
+        const productById = new Map(
+          products.map((product) => [product.id_produk, product]),
+        );
+        const details = items.map((item) => {
+          const product = productById.get(item.id_produk);
+          if (!product) {
+            throw new Error("Validated order product unexpectedly disappeared.");
+          }
+          const subtotal =
+            Math.round(Number(product.harga) * item.jumlah * 100) / 100;
+          return {
+            id_detail: createDatabaseId("D", 10),
+            id_produk: item.id_produk,
+            jumlah: item.jumlah,
+            subtotal,
+          };
+        });
+        const total =
+          Math.round(
+            details.reduce((sum, item) => sum + item.subtotal, 0) * 100,
+          ) / 100;
+        if (
+          total > 99_999_999.99 ||
+          details.some((item) => item.subtotal > 99_999_999.99)
+        ) {
+          return { error: "TOTAL_TOO_LARGE" } as const;
+        }
+
+        const order = await transaction.pesanan.create({
+          data: {
+            no_nota: createDatabaseId("PSN", 10),
+            tgl_nota: new Date(),
+            total_bayar: total,
+            metode_bayar: paymentMethod,
+            status_bayar: "Menunggu",
+            konfirmasi_pembayaran: "Menunggu",
+            id_pelanggan: customer.id_pelanggan,
+            id_karyawan: employee.id_karyawan,
+            detail_pesanan: { create: details },
+          },
+          select: { no_nota: true },
+        });
+
+        return { order };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    if ("error" in result) {
+      const issue =
+        result.error === "PROFILE_REQUIRED"
+          ? {
+              status: 409,
+              error: "Lengkapi profil pelanggan sebelum membuat pesanan.",
+            }
+          : result.error === "EMPLOYEE_REQUIRED"
+            ? {
+                status: 409,
+                error:
+                  "Pesanan belum dapat dibuat karena belum ada karyawan terdaftar.",
+              }
+            : result.error === "TOTAL_TOO_LARGE"
+              ? {
+                  status: 400,
+                  error: "Total pesanan melebihi batas transaksi yang didukung.",
+                }
+              : {
+                status: 400,
+                error: "Salah satu produk tidak ditemukan.",
+                };
+      return NextResponse.json({ error: issue.error }, { status: issue.status });
+    }
+
+    return NextResponse.json(
+      { id: result.order.no_nota },
+      { status: 201 },
+    );
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new RequestError("The request body must be valid JSON.", 400);
+      return NextResponse.json({ error: "Format data tidak valid." }, { status: 400 });
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return NextResponse.json(
+        { error: "Pesanan bersamaan terdeteksi. Silakan coba kembali." },
+        { status: 409 },
+      );
     }
 
-    throw error;
+    console.error("Order could not be created.", error);
+    return NextResponse.json(
+      { error: "Pesanan tidak dapat disimpan saat ini." },
+      { status: 500 },
+    );
   }
-}
-
-function requiredString(
-  value: unknown,
-  field: string,
-  maxLength: number,
-): string {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value.trim().length > maxLength
-  ) {
-    throw new RequestError(`${field} is required and must be at most ${maxLength} characters.`, 400);
-  }
-
-  return value.trim();
-}
-
-function parseItems(value: unknown): OrderItemInput[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
-    throw new RequestError("An order must contain between 1 and 50 product lines.", 400);
-  }
-
-  const quantities = new Map<string, number>();
-
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      throw new RequestError("Each item must contain a product ID and quantity.", 400);
-    }
-
-    const id_produk = requiredString(entry.id_produk, "id_produk", 10);
-    const jumlah = entry.jumlah;
-
-    if (!Number.isInteger(jumlah) || Number(jumlah) < 1 || Number(jumlah) > 10000) {
-      throw new RequestError("Each product quantity must be an integer from 1 to 10,000.", 400);
-    }
-
-    const nextQuantity = (quantities.get(id_produk) ?? 0) + Number(jumlah);
-    if (nextQuantity > 10000) {
-      throw new RequestError("The total quantity of a product cannot exceed 10,000.", 400);
-    }
-
-    quantities.set(id_produk, nextQuantity);
-  }
-
-  return Array.from(quantities, ([id_produk, jumlah]) => ({ id_produk, jumlah }));
-}
-
-function isPaid(status: string): boolean {
-  return ["lunas", "dibayar", "paid"].includes(status.trim().toLowerCase());
-}
-
-function isCancelled(status: string): boolean {
-  return ["batal", "dibatalkan", "cancelled", "canceled"].includes(
-    status.trim().toLowerCase(),
-  );
-}
-
-function makeId(prefix = ""): string {
-  return `${prefix}${randomUUID().replaceAll("-", "").slice(0, 10 - prefix.length).toUpperCase()}`;
-}
-
-function calculateLines(
-  items: OrderItemInput[],
-  products: { id_produk: string; harga: Prisma.Decimal }[],
-) {
-  const productById = new Map(products.map((product) => [product.id_produk, product]));
-  let totalCents = 0;
-
-  const lines = items.map((item) => {
-    const product = productById.get(item.id_produk);
-    if (!product) {
-      throw new RequestError(`Product ${item.id_produk} is not available.`, 400);
-    }
-
-    const unitPriceCents = Math.round(Number(product.harga.toString()) * 100);
-    const subtotalCents = unitPriceCents * item.jumlah;
-    if (!Number.isSafeInteger(subtotalCents)) {
-      throw new RequestError("The order total is too large.", 400);
-    }
-
-    totalCents += subtotalCents;
-    if (!Number.isSafeInteger(totalCents) || totalCents > 9_999_999_999) {
-      throw new RequestError("The order total exceeds the supported amount.", 400);
-    }
-
-    return {
-      id_produk: item.id_produk,
-      jumlah: item.jumlah,
-      subtotal: subtotalCents / 100,
-    };
-  });
-
-  return { lines, total: totalCents / 100 };
-}
-
-async function respond(operation: () => Promise<Response>): Promise<Response> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof RequestError) {
-      return Response.json({ error: error.message }, { status: error.status });
-    }
-
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === "ECONNREFUSED" || error.code === "P1001") {
-        return Response.json(
-          { error: "Database PostgreSQL tidak dapat dijangkau. Pastikan server aktif, lalu coba lagi." },
-          { status: 503 },
-        );
-      }
-
-      if (error.code === "P2002") {
-        return Response.json(
-          { error: "An order with this identifier already exists. Please try again." },
-          { status: 409 },
-        );
-      }
-
-      if (error.code === "P2003") {
-        return Response.json(
-          { error: "The selected customer, employee, or product does not exist." },
-          { status: 400 },
-        );
-      }
-
-      if (error.code === "P2025") {
-        return Response.json({ error: "The requested order was not found." }, { status: 404 });
-      }
-    }
-
-    console.error("Pesanan API request failed.", error);
-    return Response.json({ error: "The order request could not be completed." }, { status: 500 });
-  }
-}
-
-export async function GET(): Promise<Response> {
-  return respond(async () => {
-    const [products, allOrders, customers, employees] = await Promise.all([
-      prisma.produk.findMany({
-        orderBy: { nama_produk: "asc" },
-        select: {
-          id_produk: true,
-          nama_produk: true,
-          harga: true,
-        },
-      }),
-      prisma.pesanan.findMany({
-        include: orderInclude,
-        orderBy: [{ tgl_nota: "desc" }, { no_nota: "desc" }],
-      }),
-      prisma.pelanggan.findMany({
-        select: { id_pelanggan: true, nama_pelanggan: true },
-        orderBy: { nama_pelanggan: "asc" },
-      }),
-      prisma.karyawan.findMany({
-        select: { id_karyawan: true, nama_karyawan: true },
-        orderBy: { nama_karyawan: "asc" },
-      }),
-    ]);
-
-    const orders = allOrders.filter((order) => !isCancelled(order.status_bayar));
-    return Response.json({ products, orders, customers, employees });
-  });
-}
-
-export async function POST(request: Request): Promise<Response> {
-  return respond(async () => {
-    const body = await readJson(request);
-    if (!isRecord(body)) {
-      throw new RequestError("A JSON order payload is required.", 400);
-    }
-
-    const id_pelanggan = requiredString(body.id_pelanggan, "id_pelanggan", 10);
-    const id_karyawan = requiredString(body.id_karyawan, "id_karyawan", 10);
-    const items = parseItems(body.items);
-
-    const order = await prisma.$transaction(async (transaction) => {
-      const products = await transaction.produk.findMany({
-        where: { id_produk: { in: items.map((item) => item.id_produk) } },
-        select: { id_produk: true, harga: true },
-      });
-      const { lines, total } = calculateLines(items, products);
-      const no_nota = makeId("N");
-
-      await transaction.pesanan.create({
-        data: {
-          no_nota,
-          tgl_nota: new Date(),
-          total_bayar: total,
-          status_bayar: "Belum Dibayar",
-          metode_bayar: null,
-          tgl_bayar: null,
-          id_pelanggan,
-          id_karyawan,
-          kode_voucher: null,
-          konfirmasi_pembayaran: null,
-        },
-      });
-
-      await transaction.detail_pesanan.createMany({
-        data: lines.map((line) => ({
-          id_detail: makeId("D"),
-          no_nota,
-          id_produk: line.id_produk,
-          jumlah: line.jumlah,
-          subtotal: line.subtotal,
-        })),
-      });
-
-      return transaction.pesanan.findUniqueOrThrow({
-        where: { no_nota },
-        include: orderInclude,
-      });
-    });
-
-    return Response.json({ order }, { status: 201 });
-  });
-}
-
-export async function PUT(request: Request): Promise<Response> {
-  return respond(async () => {
-    const body = await readJson(request);
-    if (!isRecord(body)) {
-      throw new RequestError("A JSON order payload is required.", 400);
-    }
-
-    const no_nota = requiredString(body.no_nota, "no_nota", 10);
-    const items = parseItems(body.items);
-
-    const order = await prisma.$transaction(async (transaction) => {
-      const existing = await transaction.pesanan.findUnique({
-        where: { no_nota },
-        select: { no_nota: true, status_bayar: true },
-      });
-
-      if (!existing) {
-        throw new RequestError("The requested order was not found.", 404);
-      }
-      if (isPaid(existing.status_bayar)) {
-        throw new RequestError("Paid orders cannot be edited.", 409);
-      }
-
-      const products = await transaction.produk.findMany({
-        where: { id_produk: { in: items.map((item) => item.id_produk) } },
-        select: { id_produk: true, harga: true },
-      });
-      const { lines, total } = calculateLines(items, products);
-
-      await transaction.detail_pesanan.deleteMany({ where: { no_nota } });
-      await transaction.detail_pesanan.createMany({
-        data: lines.map((line) => ({
-          id_detail: makeId("D"),
-          no_nota,
-          id_produk: line.id_produk,
-          jumlah: line.jumlah,
-          subtotal: line.subtotal,
-        })),
-      });
-      await transaction.pesanan.update({
-        where: { no_nota },
-        data: { total_bayar: total },
-      });
-
-      return transaction.pesanan.findUniqueOrThrow({
-        where: { no_nota },
-        include: orderInclude,
-      });
-    });
-
-    return Response.json({ order });
-  });
-}
-
-export async function DELETE(request: Request): Promise<Response> {
-  return respond(async () => {
-    const body = await readJson(request);
-    if (!isRecord(body)) {
-      throw new RequestError("A JSON order identifier is required.", 400);
-    }
-
-    const no_nota = requiredString(body.no_nota, "no_nota", 10);
-    await prisma.$transaction(async (transaction) => {
-      const order = await transaction.pesanan.findUnique({
-        where: { no_nota },
-        select: {
-          no_nota: true,
-          feedback: { select: { id_feedback: true } },
-        },
-      });
-
-      if (!order) {
-        throw new RequestError("The requested order was not found.", 404);
-      }
-      if (order.feedback.length > 0) {
-        throw new RequestError(
-          "This order has associated feedback and cannot be permanently deleted.",
-          409,
-        );
-      }
-
-      await transaction.detail_pesanan.deleteMany({ where: { no_nota } });
-      await transaction.pesanan.delete({ where: { no_nota } });
-    });
-
-    return Response.json({ deleted: no_nota });
-  });
 }
